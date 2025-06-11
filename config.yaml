@@ -1,6 +1,6 @@
 # ─── Data ─────────────────────────────────────────
 dataset:     /content/drive/MyDrive/OC20/is2re/100k_extracted/is2res_train_val_test_lmdbs/data/is2re/100k/train/data.lmdb
-# val_dataset:  /content/drive/MyDrive/OC20/is2re/100k_extracted/.../val_id/data.lmdb
+val_dataset:  /content/drive/MyDrive/OC20/val_id/is2res_train_val_test_lmdbs/data/is2re/all/val_id/data.lmdb
 
 # ─── Model ────────────────────────────────────────
 name: gemnet_oc
