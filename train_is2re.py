@@ -2,7 +2,7 @@ import argparse, pathlib, yaml, time, csv, math, os
 import torch
 from torch_geometric.loader import DataLoader
 
-from gemnet_pytorch.data.oc20_lmdb import OC20LmdbDataset
+from data.oc20_lmdb import OC20LmdbDataset
 from gemnet.model.gemnet import GemNet                      
 
 
