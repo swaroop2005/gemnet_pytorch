@@ -3,7 +3,7 @@ import torch
 from torch_geometric.loader import DataLoader
 
 from gemnet_pytorch.data.oc20_lmdb import OC20LmdbDataset
-from gemnet.gemnet_oc import GemNetOC                        # adapt if filename differs
+from gemnet.model.gemnet import GemNet                      
 
 
 # ─────────────────────────── helper ────────────────────────────
@@ -12,7 +12,7 @@ def build_model(cfg):
           if k.startswith("emb_size_")
           or k in ("num_spherical","num_radial","num_blocks",
                     "cutoff","max_neighbors","extensive","activation")}
-    return GemNetOC(**kw)
+    return GemNet(**kw)
 
 
 def save_checkpoint(path, epoch, model, optim, scheduler, best_val, ema=None):
