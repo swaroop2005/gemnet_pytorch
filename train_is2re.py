@@ -156,7 +156,7 @@ def main():
             print("Early stopping criterion met.")
             break
 
-    print("✓ Training finished. Best val MAE:", best_val)
+    print("Training finished. Best val MAE:", best_val)
 
 
 if __name__ == "__main__":
