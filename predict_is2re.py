@@ -3,7 +3,7 @@ import argparse, yaml, torch, pathlib
 from torch_geometric.loader import DataLoader
 
 from gemnet_pytorch.data.oc20_lmdb import OC20LmdbDataset
-from gemnet.model.gemnet import GemNet  # adjust if filename differs
+from gemnet.model.gemnet import GemNet  
 
 # ---------- CLI ----------
 p = argparse.ArgumentParser()
@@ -20,7 +20,7 @@ cfg = yaml.safe_load(open(args.config))
 model_kwargs = {k: cfg[k] for k in cfg if k.startswith("emb_size_")
                 or k in ("num_spherical","num_radial","num_blocks",
                          "cutoff","max_neighbors","extensive","activation")}
-model = GemNetOC(**model_kwargs).to(args.device)
+model = GemNet(**model_kwargs).to(args.device)
 state = torch.load(args.ckpt, map_location=args.device)
 model.load_state_dict(state["state_dict"])
 model.eval()
@@ -50,4 +50,4 @@ with open("recommendations.csv","w") as f:
     f.write("rank,energy_eV,lmdb_key\n")
     for i,(e,k) in enumerate(topk,1):
         f.write(f"{i},{e},{k.decode() if isinstance(k,bytes) else k}\n")
-print("✓ recommendations.csv written")
+print("recommendations.csv written")
