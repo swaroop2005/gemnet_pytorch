@@ -3,7 +3,7 @@ import argparse, yaml, torch, pathlib
 from torch_geometric.loader import DataLoader
 
 from gemnet_pytorch.data.oc20_lmdb import OC20LmdbDataset
-from gemnet.model.gemnet import Gemnet  # adjust if filename differs
+from gemnet.model.gemnet import GemNet  # adjust if filename differs
 
 # ---------- CLI ----------
 p = argparse.ArgumentParser()
