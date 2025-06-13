@@ -1,58 +1,68 @@
-# data/oc20_lmdb.py  – IS2RE-only, zero-scan version
-import lmdb, pickle, torch
-from torch_geometric.data import Data
-from torch_geometric.nn import radius_graph
+"""
+Minimal OC20 LMDB → PyG Dataset
+--------------------------------
+• Reads OC20 IS2RE (or S2EF) LMDB files.
+• Pass-through: uses the pre-computed edge_index, edge_attr, cell_offsets
+  already stored in each LMDB entry.
+• Returns a torch_geometric.data.Data object with keys used by GemNet.
+"""
 
-class OC20LmdbDataset(torch.utils.data.Dataset):
-    def __init__(self, lmdb_path, cutoff=6.0, max_nbh=50, transform=None):
+import lmdb
+import pickle
+import torch
+from torch.utils.data import Dataset
+from torch_geometric.data import Data
+
+
+class OC20LmdbDataset(Dataset):
+    """
+    Args
+    ----
+    lmdb_path : str
+        Path to `data.lmdb` file (train or val).
+    target_key : str
+        Which energy label to use.  'y_relaxed' for IS2RE
+        or 'y' for generic S2EF frame.
+    """
+
+    def __init__(self, lmdb_path: str, target_key: str = "y_relaxed"):
+        self.lmdb_path = lmdb_path
+        self.target_key = target_key
+
         self.env = lmdb.open(
             lmdb_path,
+            subdir=False,
             readonly=True,
             lock=False,
             readahead=False,
-            max_readers=32,
+            meminit=False,
         )
         with self.env.begin() as txn:
-            # OC20 LMDB always stores dataset length under the key b"length"
-            self.length = pickle.loads(txn.get(b"length"))
-        self.cutoff = cutoff
-        self.max_nbh = max_nbh
-        self.transform = transform            # optional extra transforms
+            self.keys = [k for k, _ in txn.cursor()]
 
+    # --------------------------------------------------------------------- #
     def __len__(self):
-        return self.length
+        return len(self.keys)
 
-    def _fetch(self, idx):
-        """Return one raw OC20 sample as a Python dict."""
-        key = str(idx).encode()               # integer keys: b"0", b"1", …
-        with self.env.begin() as txn:
-            return pickle.loads(txn.get(key))
+    # --------------------------------------------------------------------- #
+    def __getitem__(self, idx: int) -> Data:
+        with self.env.begin(write=False) as txn:
+            sample = pickle.loads(txn.get(self.keys[idx]))
 
-    def __getitem__(self, idx):
-        sample = self._fetch(idx)
+        # Convert to torch tensors if not already
+        z = sample.atomic_numbers.long()
+        pos = sample.pos               
+        cell = sample.cell.squeeze()   
 
-        # ---- build PyG Data object -----------------------------------------
-        z   = torch.tensor(sample["atomic_numbers"], dtype=torch.long)
-        pos = torch.tensor(sample["coords"],         dtype=torch.float32)
-        cell= torch.tensor(sample["cell"],           dtype=torch.float32)
-
-        # neighbour list on-the-fly (fast ― <2 ms per structure on A100)
-        edge_index = radius_graph(
-            pos, r=self.cutoff, loop=False,
-            max_num_neighbors=self.max_nbh
-        )
-        row, col   = edge_index
-        vec        = pos[col] - pos[row]
         data = Data(
-            z=z, pos=pos, cell=cell,
-            edge_index=edge_index,
-            edge_vec=vec,
-            edge_dist=vec.norm(dim=-1, keepdim=True),
-            y=torch.tensor(sample["y_relaxed"], dtype=torch.float32).unsqueeze(0),
-            sid=torch.tensor([idx])           # keep original UID if you wish
+            z=z,
+            pos=pos,
+            cell=cell,
+            edge_index=sample.edge_index,        
+            edge_attr=sample.edge_attr,          
+            cell_offsets=sample.cell_offsets,    
+            y=sample[self.target_key].unsqueeze(0),  
+            natoms=torch.tensor([pos.size(0)], dtype=torch.long),
         )
-
-        if self.transform:
-            data = self.transform(data)
 
         return data
