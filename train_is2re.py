@@ -6,16 +6,6 @@ from data.oc20_lmdb import OC20LmdbDataset
 from gemnet.model.gemnet import GemNet                      
 
 
-# ─────────────────────────── helper ────────────────────────────
-# top-of-file imports remain unchanged
-import argparse, pathlib, yaml, time, csv, math, os
-import torch
-from torch_geometric.loader import DataLoader
-
-from data.oc20_lmdb import OC20LmdbDataset
-from gemnet.model.gemnet import GemNet
-
-
 # ───────────────────────── helper ─────────────────────────
 def build_model(cfg):
     """
@@ -109,16 +99,8 @@ def main():
     last_ckpt = run_dir / "last.pt"
 
     # ─── Data ─────────────────────────────────────────────────
-    train_ds = OC20LmdbDataset(
-        lmdb_path = cfg["dataset"],                # << key matches YAML line
-        cutoff    = cfg["model"].get("cutoff", 6.0),
-        max_nbh   = cfg["model"].get("max_neighbors", 50),
-    )
-    val_ds = OC20LmdbDataset(
-        lmdb_path = cfg["val_dataset"],            # << key matches YAML line
-        cutoff    = cfg["model"].get("cutoff", 6.0),
-        max_nbh   = cfg["model"].get("max_neighbors", 50),
-    )
+    train_ds = OC20LmdbDataset(lmdb_path=cfg["dataset"])
+    val_ds = OC20LmdbDataset(lmdb_path=cfg["val_dataset"])
 
     train_dl = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True,
                           num_workers=2, pin_memory=True)
