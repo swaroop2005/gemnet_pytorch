@@ -7,12 +7,63 @@ from gemnet.model.gemnet import GemNet
 
 
 # ─────────────────────────── helper ────────────────────────────
+# top-of-file imports remain unchanged
+import argparse, pathlib, yaml, time, csv, math, os
+import torch
+from torch_geometric.loader import DataLoader
+
+from data.oc20_lmdb import OC20LmdbDataset
+from gemnet.model.gemnet import GemNet
+
+
+# ───────────────────────── helper ─────────────────────────
 def build_model(cfg):
-    kw = {k: cfg[k] for k in cfg
-          if k.startswith("emb_size_")
-          or k in ("num_spherical","num_radial","num_blocks",
-                    "cutoff","max_neighbors","extensive","activation")}
+    """
+    Build GemNet with the minimal surgery required to accept the
+    keys you placed in config.yaml.
+    """
+    model_cfg = cfg["model"]                      # your YAML does have a 'model:' block
+
+    # ---- rename legacy keys -------------------------------------------------
+    translation = {
+        "emb_size_trip_in":  "emb_size_trip",
+        "emb_size_quad_in":  "emb_size_quad",
+        "emb_size_trip_out": "emb_size_bil_trip",
+        "emb_size_quad_out": "emb_size_bil_quad",
+        "num_blocks":        "num_layers",        # GemNet uses num_layers
+    }
+    for old, new in translation.items():
+        if old in model_cfg and new not in model_cfg:
+            model_cfg[new] = model_cfg.pop(old)
+
+    # ---- mandatory defaults (if omitted) ------------------------------------
+    defaults = dict(
+        num_before_skip = 1,
+        num_after_skip  = 2,
+        num_concat      = 1,
+        num_atom        = 100,     # max atoms per structure
+        triplets_only   = False,
+    )
+    for k, v in defaults.items():
+        model_cfg.setdefault(k, v)
+
+    # ---- GemNet-accepted kwargs whitelist -----------------------------------
+    allowed = {
+        "emb_size_atom", "emb_size_edge",
+        "emb_size_trip", "emb_size_quad",
+        "emb_size_bil_trip", "emb_size_bil_quad",
+        "num_before_skip", "num_after_skip",
+        "num_concat", "num_atom",
+        "cutoff", "max_neighbors",
+        "num_layers",
+        "num_spherical", "num_radial",
+        "triplets_only", "extensive",
+    }
+    kw = {k: v for k, v in model_cfg.items() if k in allowed}
+
     return GemNet(**kw)
+
+
 
 
 def save_checkpoint(path, epoch, model, optim, scheduler, best_val, ema=None):
@@ -58,8 +109,17 @@ def main():
     last_ckpt = run_dir / "last.pt"
 
     # ─── Data ─────────────────────────────────────────────────
-    train_ds = OC20LmdbDataset(cfg["dataset"])
-    val_ds   = OC20LmdbDataset(cfg["val_dataset"])
+    train_ds = OC20LmdbDataset(
+        lmdb_path = cfg["dataset"],                # << key matches YAML line
+        cutoff    = cfg["model"].get("cutoff", 6.0),
+        max_nbh   = cfg["model"].get("max_neighbors", 50),
+    )
+    val_ds = OC20LmdbDataset(
+        lmdb_path = cfg["val_dataset"],            # << key matches YAML line
+        cutoff    = cfg["model"].get("cutoff", 6.0),
+        max_nbh   = cfg["model"].get("max_neighbors", 50),
+    )
+
     train_dl = DataLoader(train_ds, batch_size=cfg["batch_size"], shuffle=True,
                           num_workers=2, pin_memory=True)
     val_dl   = DataLoader(val_ds, batch_size=cfg["eval_batch_size"], shuffle=False,
