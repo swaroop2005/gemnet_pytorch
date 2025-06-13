@@ -51,10 +51,12 @@ def build_model(cfg):
         "num_before_skip", "num_after_skip",
         "num_concat", "num_atom",
         "cutoff", "max_neighbors",
-        "num_layers",
+        "num_layers", "num_blocks",
         "num_spherical", "num_radial",
         "triplets_only", "extensive",
         "activation",
+        "emb_size_rbf", "emb_size_cbf", "emb_size_sbf",
+        "emb_size_aint_in", "emb_size_aint_out",  # if needed by GemNet
     }
     kw = {k: v for k, v in model_cfg.items() if k in allowed}
 
