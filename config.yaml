@@ -1,8 +1,36 @@
-# ─── Data ─────────────────────────────────────────
 dataset:     /content/drive/MyDrive/OC20/is2re/100k_extracted/is2res_train_val_test_lmdbs/data/is2re/100k/train/data.lmdb
 val_dataset:  /content/drive/MyDrive/OC20/val_id/is2res_train_val_test_lmdbs/data/is2re/all/val_id/data.lmdb
 
 # ─── Model ────────────────────────────────────────
+model:                    # ← NEW HEADER
+  name: GemNet
+  num_spherical: 7
+  num_radial: 128
+  num_blocks: 4
+  emb_size_atom: 256
+  emb_size_edge: 512
+  emb_size_trip_in: 64
+  emb_size_trip_out: 64
+  emb_size_quad_in: 32
+  emb_size_quad_out: 32
+  emb_size_aint_in: 64          # ← restore if required by constructor
+  emb_size_aint_out: 64
+  emb_size_rbf: 16              # ← restore
+  emb_size_cbf: 16
+  emb_size_sbf: 32
+  cutoff: 12.0
+  max_neighbors: 30
+  extensive: false
+  activation: silu
+
+# ─── Optimizer ────────────────────────────────────
+batch_size:       4
+eval_batch_size:  4
+learning_rate: 5.e-4
+max_epochs:      30
+loss_energy:    mae
+
+
 name: gemnet_oc
 num_spherical: 7
 num_radial: 128
