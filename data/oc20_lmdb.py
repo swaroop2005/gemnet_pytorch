@@ -45,24 +45,34 @@ class OC20LmdbDataset(Dataset):
         return len(self.keys)
 
     # --------------------------------------------------------------------- #
-    def __getitem__(self, idx: int) -> Data:
-        with self.env.begin(write=False) as txn:
-            sample = pickle.loads(txn.get(self.keys[idx]))
+    def __getitem__(self, idx: int):
+    with self.env.begin(write=False) as txn:
+        sample = pickle.loads(txn.get(self.keys[idx]))
 
-        # Convert to torch tensors if not already
-        z = sample.atomic_numbers.long()
-        pos = sample.pos               
-        cell = sample.cell.squeeze()   
+    z = sample.atomic_numbers.long()
+    pos = sample.pos
+    cell = sample.cell.squeeze()
+    edge_index = sample.edge_index
+    cell_offsets = sample.cell_offsets
 
-        data = Data(
-            z=z,
-            pos=pos,
-            cell=cell,
-            edge_index=sample.edge_index,        
-            edge_attr=sample.edge_attr,          
-            cell_offsets=sample.cell_offsets,    
-            y=sample[self.target_key].unsqueeze(0),  
-            natoms=torch.tensor([pos.size(0)], dtype=torch.long),
-        )
+    # Fix: Use distances as edge_attr if edge_attr is None
+    edge_attr = sample.edge_attr
+    if edge_attr is None and hasattr(sample, "distances") and sample.distances is not None:
+        edge_attr = sample.distances.unsqueeze(-1)  # (N_edges, 1)
+    elif edge_attr is None:
+        raise ValueError("No edge_attr or distances found in sample!")
 
-        return data
+    # IS2RE energy target
+    y = torch.tensor([sample.y_relaxed], dtype=torch.float32)
+
+    data = Data(
+        z=z,
+        pos=pos,
+        cell=cell,
+        edge_index=edge_index,
+        edge_attr=edge_attr,
+        cell_offsets=cell_offsets,
+        y=y,
+        natoms=torch.tensor([pos.size(0)], dtype=torch.long),
+    )
+    return data
