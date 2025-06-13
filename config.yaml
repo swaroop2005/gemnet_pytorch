@@ -4,7 +4,7 @@ val_dataset: /content/drive/MyDrive/OC20/val_id/is2res_train_val_test_lmdbs/data
 # ─── Model ────────────────────────────────────────
 model:
   num_spherical: 7
-  num_radial: 128
+  num_radial: 64
   num_blocks: 4
   emb_size_atom: 256
   emb_size_edge: 512
