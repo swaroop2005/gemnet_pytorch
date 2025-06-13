@@ -26,7 +26,6 @@ def build_model(cfg):
         "emb_size_quad_in": "emb_size_quad",
         "emb_size_trip_out": "emb_size_bil_trip",
         "emb_size_quad_out": "emb_size_bil_quad",
-        "num_blocks": "num_layers",  # GemNet uses num_layers
     }
     for old, new in translation.items():
         if old in model_cfg and new not in model_cfg:
