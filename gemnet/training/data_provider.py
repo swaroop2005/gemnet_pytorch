@@ -1,4 +1,3 @@
-import functools
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Subset
@@ -7,27 +6,15 @@ from torch.utils.data.sampler import (
     SubsetRandomSampler,
     SequentialSampler,
 )
-
-def collate(batch, target_keys):
-    """
-    custom batching function because batches have variable shape
-    """
-    batch = batch[0]  # already batched: Batching happens in DataContainer
-    inputs = {}
-    targets = {}
-    for key in batch:
-        if key in target_keys:
-            targets[key] = batch[key]
-        else:
-            inputs[key] = batch[key]
-    return inputs, targets
+from torch_geometric.data import Batch
 
 class DataProvider:
     """
+    DataProvider for LMDB (torch_geometric.data.Data) datasets.
     Parameters
     ----------
         data_container: DataContainer
-            Contains the dataset.
+            Contains the dataset (should use OC20LmdbDataset or similar).
         ntrain: int
             Number of samples in the training set.
         nval: int
@@ -60,6 +47,7 @@ class DataProvider:
         shuffle: bool = True,
         sample_with_replacement: bool = False,
         split = None,
+        pin_memory: bool = True,
         **kwargs
     ):
         self.kwargs = kwargs
@@ -70,6 +58,7 @@ class DataProvider:
         self.random_split = random_split
         self.shuffle = shuffle
         self.sample_with_replacement = sample_with_replacement
+        self.pin_memory = pin_memory
 
         # Random state parameter, such that random operations are reproducible if wanted
         self._random_state = np.random.RandomState(seed=seed)
@@ -80,49 +69,38 @@ class DataProvider:
             self.nsamples, self.idx = self._manual_split_data(split)
 
     def _manual_split_data(self, split):
-
         if isinstance(split, (dict,str)):
             if isinstance(split, str):
                 # split is the path to the file containing the indices
                 assert split.endswith(".npz") , "'split' has to be a .npz file if 'split' is of type str"
                 split = np.load(split)
-
             keys = ["train", "val", "test"]
             for key in keys:
                 assert key in split.keys(), f"{key} is not in {[k for k in split.keys()]}"
-
             idx = {key: np.array(split[key]) for key in keys}
             nsamples = {key: len(idx[key]) for key in keys}
-
             return nsamples, idx
-
         else:
             raise TypeError("'split' has to be either of type str or dict if not None.")
 
     def _random_split_data(self, ntrain, nval):
-
         nsamples = {
             "train": ntrain,
             "val": nval,
             "test": self._ndata - ntrain - nval,
         }
-
         all_idx = np.arange(self._ndata)
         if self.random_split:
             # Shuffle indices
             all_idx = self._random_state.permutation(all_idx)
-
         if self.sample_with_replacement:
             # Sample with replacement so as to train an ensemble of Dimenets
             all_idx = self._random_state.choice(all_idx, self._ndata, replace=True)
-
-        # Store indices of training, validation and test data
         idx = {
             "train": all_idx[0:ntrain],
             "val": all_idx[ntrain : ntrain + nval],
             "test": all_idx[ntrain + nval :],
         }
-
         return nsamples, idx
 
     def save_split(self, path):
@@ -135,6 +113,10 @@ class DataProvider:
         np.savez(path, **self.idx)
 
     def get_dataset(self, split, batch_size=None):
+        """
+        Returns an infinite generator of PyG Batch objects for the given split.
+        For validation/test, disables shuffling.
+        """
         assert split in self.idx
         if batch_size is None:
             batch_size = self.batch_size
@@ -145,12 +127,12 @@ class DataProvider:
             torch_generator = torch.Generator()
             if self.seed is not None:
                 torch_generator.manual_seed(self.seed)
-            idx_sampler = SubsetRandomSampler(indices, torch_generator)
-            dataset = self.data_container 
+            idx_sampler = SubsetRandomSampler(indices, generator=torch_generator)
+            dataset = self.data_container
         else:
             subset = Subset(self.data_container, indices)
             idx_sampler = SequentialSampler(subset)
-            dataset = subset 
+            dataset = subset
 
         batch_sampler = BatchSampler(
             idx_sampler, batch_size=batch_size, drop_last=False
@@ -158,17 +140,15 @@ class DataProvider:
 
         dataloader = DataLoader(
             dataset,
-            sampler=batch_sampler,
-            collate_fn=functools.partial(collate, target_keys=self.data_container.targets),
-            pin_memory=True,  # load on CPU push to GPU
+            batch_sampler=batch_sampler,
+            collate_fn=lambda batch: Batch.from_data_list(batch),
+            pin_memory=self.pin_memory,
             **self.kwargs
         )
 
-        # loop infinitely
-        # we use the generator as the rest of the code is based on steps and not epochs
         def generator():
             while True:
-                for inputs, targets in dataloader:
-                    yield inputs, targets
+                for batch in dataloader:
+                    yield batch
 
         return generator()
