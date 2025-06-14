@@ -173,7 +173,9 @@ if __name__ == "__main__":
                 config[key] = ast.literal_eval(val)
             except (ValueError, SyntaxError):
                 pass
-
+    if "model" in config:
+        config.update(config.pop("model"))
+        
     nBatches = 25  # number of batches to use to fit a single variable
 
     run(nBatches, **config)
