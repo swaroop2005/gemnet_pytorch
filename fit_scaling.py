@@ -50,9 +50,6 @@ def run(
     emb_size_bil_quad,
     emb_size_bil_trip,
     triplets_only,
-    forces_coupled,
-    direct_forces,
-    mve,
     cutoff,
     int_cutoff,
     envelope_exponent,
@@ -61,7 +58,6 @@ def run(
     scale_file,
     data_seed,
     val_dataset,
-    tfseed,
     batch_size,
     comment,
     overwrite_mode=1,
@@ -70,7 +66,7 @@ def run(
     """
     Run this function to automatically fit all scaling factors in the network.
     """
-    torch.manual_seed(tfseed)
+    torch.manual_seed(data_seed)
 
     def init(scale_file):
         # initialize file
@@ -111,14 +107,14 @@ def run(
         num_atom=num_atom,
         emb_size_bil_quad=emb_size_bil_quad,
         emb_size_bil_trip=emb_size_bil_trip,
-        num_targets=2 if mve else 1,
+        num_targets=1,  # IS2RE predicts only energy, not uncertainty
         cutoff=cutoff,
         int_cutoff=int_cutoff,
         envelope_exponent=envelope_exponent,
-        forces_coupled=forces_coupled,
-        direct_forces=True,  # evaluates faster
+        forces_coupled=False,
+        direct_forces=False,
         triplets_only=triplets_only,
-        activation="swish",
+        activation="silu",
         extensive=extensive,
         output_init=output_init,
         scale_file=scale_file,
@@ -141,17 +137,17 @@ def run(
 
     # Initialize datasets
     dataset_iter = val_data_provider.get_dataset("val")
-    logging.info("Prepare training")
+    logging.info("Prepare scaling fit loop")
 
     # Initialize trainer
-    trainer = Trainer(model, mve=mve)
+    trainer = Trainer(model, mve=False)
     metrics = Metrics("train", trainer.tracked_metrics, None)
 
-    # Training loop
-    logging.info("Start training")
+    # Fitting loop
+    logging.info("Start fitting scaling factors")
 
     while not AutomaticFit.fitting_completed():
-        for step in trange(0, nBatches, desc="Training..."):
+        for step in trange(0, nBatches, desc="Fitting..."):
             trainer.test_on_batch(dataset_iter, metrics)
 
         current_var = AutomaticFit.activeVar
@@ -160,28 +156,24 @@ def run(
         else:
             print("Found no variable to fit. Something went wrong!")
 
-    logging.info(f"\n Fitting done. Results saved to: {scale_file}")
+    logging.info(f"\nScaling fit done. Results saved to: {scale_file}")
 
 
 if __name__ == "__main__":
 
     config_path = "config.yaml"
 
-    with open('config.yaml', 'r') as c:
+    with open(config_path, 'r') as c:
         config = yaml.safe_load(c)
-        
+
     # For strings that yaml doesn't parse (e.g. None)
     for key, val in config.items():
-        if type(val) is str:
+        if isinstance(val, str):
             try:
                 config[key] = ast.literal_eval(val)
             except (ValueError, SyntaxError):
                 pass
 
-    nBatches = 25  ## number of batches to use to fit a single variable
+    nBatches = 25  # number of batches to use to fit a single variable
 
-    config["scale_file"] = "scaling_factors.json"
-    config["batch_size"] = 32
-    config["direct_forces"] = True
-    config["triplets_only"] = False
     run(nBatches, **config)
