@@ -24,6 +24,7 @@ model:
   max_neighbors: 30
   extensive: false
   activation: silu
+  scale_file: "./scaling_is2re_factors.json"
 
 # ─── Optimizer ────────────────────────────────────
 batch_size:       4
