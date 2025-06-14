@@ -5,9 +5,10 @@ import torch
 from .schedules import LinearWarmupExponentialDecay
 from .ema_decay import ExponentialMovingAverage
 
-
 class Trainer:
     """
+    Trainer for LMDB/PyG-based datasets.
+
     Parameters
     ----------
         model: Model
@@ -19,8 +20,8 @@ class Trainer:
         decay_rate: float
             Decay rate.
         warmup_steps: int
-            Total number of warmup steps of the learning rate schedule..
-        weight_decay: bool
+            Total number of warmup steps of the learning rate schedule.
+        weight_decay: float
             Weight decay factor of the AdamW optimizer.
         staircase: bool
             If True use staircase decay and not (continous) exponential decay
@@ -35,14 +36,16 @@ class Trainer:
         ema_decay: float
             Decay to use to maintain the moving averages of trained variables.
         rho_force: float
-            Weighing factor for the force loss compared to the energy. In range [0,1]
-            loss = loss_energy * (1-rho_force) + loss_force * rho_force
+            Weighting factor for the force loss compared to the energy. In range [0,1]
+                loss = loss_energy * (1-rho_force) + loss_force * rho_force
         loss: str
             Name of the loss objective of the forces.
         mve: bool
             If True perform Mean Variance Estimation.
         agc: bool
             If True use adaptive gradient clipping else clip by global norm.
+        device: torch.device or str
+            Device to use for training ("cuda" or "cpu").
     """
 
     def __init__(
@@ -55,14 +58,15 @@ class Trainer:
         weight_decay: float = 0.001,
         staircase: bool = False,
         grad_clip_max: float = 1000,
-        decay_patience: int = 10,  # decay lr on plateau by decay_factor
+        decay_patience: int = 10,
         decay_factor: float = 0.5,
         decay_cooldown: int = 10,
         ema_decay: float = 0.999,
         rho_force: float = 0.99,
-        loss: str = "mae",  # else use rmse
+        loss: str = "mae",
         mve: bool = False,
-        agc=False,
+        agc: bool = False,
+        device=None,
     ):
         assert 0 <= rho_force <= 1
 
@@ -73,6 +77,12 @@ class Trainer:
         self.mve = mve
         self.loss = loss
         self.agc = agc
+
+        if device is None:
+            self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        else:
+            self.device = torch.device(device)
+        self.model.to(self.device)
 
         if mve:
             self.tracked_metrics = [
@@ -117,17 +127,10 @@ class Trainer:
             rest_params = []
             for name, param in self.model.named_parameters():
                 if param.requires_grad:
-                    if "atom_emb" in name:
-                        rest_params += [param]
-                        continue
-                    if "frequencies" in name:
-                        rest_params += [param]
-                        continue
-                    if "bias" in name:
-                        rest_params += [param]
-                        continue
-                    adamW_params += [param]
-
+                    if "atom_emb" in name or "frequencies" in name or "bias" in name:
+                        rest_params.append(param)
+                    else:
+                        adamW_params.append(param)
             # AdamW optimizer
             AdamW = torch.optim.AdamW(
                 adamW_params,
@@ -140,8 +143,7 @@ class Trainer:
             lr_schedule_AdamW = LinearWarmupExponentialDecay(
                 AdamW, warmup_steps, decay_steps, decay_rate, staircase
             )
-
-            # Adam: Optimzer for embeddings, frequencies and biases
+            # Adam: optimizer for embeddings, frequencies and biases
             Adam = torch.optim.Adam(
                 rest_params,
                 lr=learning_rate,
@@ -152,16 +154,10 @@ class Trainer:
             lr_schedule_Adam = LinearWarmupExponentialDecay(
                 Adam, warmup_steps, decay_steps, decay_rate, staircase
             )
-
-            # Wrap multiple optimizers to ease optimizer calls later on
-            self.schedulers = MultiWrapper(
-                lr_schedule_AdamW, lr_schedule_Adam
-            )
+            self.schedulers = MultiWrapper(lr_schedule_AdamW, lr_schedule_Adam)
             self.optimizers = MultiWrapper(AdamW, Adam)
-
-
         else:
-            # Adam: Optimzer for all parameters
+            # Adam: optimizer for all parameters
             Adam = torch.optim.Adam(
                 self.model.parameters(),
                 lr=learning_rate,
@@ -172,12 +168,10 @@ class Trainer:
             lr_schedule_Adam = LinearWarmupExponentialDecay(
                 Adam, warmup_steps, decay_steps, decay_rate, staircase
             )
-
-            # Also wrap single optimizer for unified interface later
             self.schedulers = MultiWrapper(lr_schedule_Adam)
             self.optimizers = MultiWrapper(Adam)
 
-        # Learning rate decay on plateau
+        # LR decay on plateau
         self.plateau_callback = ReduceLROnPlateau(
             optimizer=self.optimizers,
             scheduler=self.schedulers,
@@ -188,14 +182,10 @@ class Trainer:
         )
 
         if self.agc:
-            # adaptive gradient clipping should not modify the last layer (see paper)
             self.params_except_last = []
             for name, param in self.model.named_parameters():
-                if param.requires_grad:
-                    if "out_energy" in name:
-                        self.params_except_last += [param]
-                    if "out_forces" in name:
-                        self.params_except_last += [param]
+                if param.requires_grad and ("out_energy" in name or "out_forces" in name):
+                    self.params_except_last.append(param)
 
         self.exp_decay = ExponentialMovingAverage(
             [p for p in self.model.parameters() if p.requires_grad], self.ema_decay
@@ -218,17 +208,10 @@ class Trainer:
         if x.ndim <= 1:
             return x.norm(norm_type)
         else:
-            # works for nn.ConvNd and nn,Linear where output dim is first in the kernel/weight tensor
-            # might need special cases for other weights (possibly MHA) where this may not be true
             return x.norm(norm_type, dim=tuple(range(1, x.ndim)), keepdim=True)
 
     @staticmethod
     def _adaptive_gradient_clipping(parameters, clip_factor=0.05, eps=1e-3, norm_type=2.0):
-        """
-        https://github.com/rwightman/pytorch-image-models/blob/master/timm/utils/agc.py
-
-        Adapted from High-Performance Large-Scale Image Recognition Without Normalization:
-        https://github.com/deepmind/deepmind-research/blob/master/nfnets/optim.py"""
         with torch.no_grad():
             if isinstance(parameters, torch.Tensor):
                 parameters = [parameters]
@@ -248,45 +231,34 @@ class Trainer:
                 p.grad.copy_(new_grads)
 
     def scale_shared_grads(self):
-        """Divide the gradients of the layers that are shared across multiple blocks
-        by the number the weights are shared for
-        """
         with torch.no_grad():
-
             def scale_grad(param, scale_factor):
                 if param.grad is None:
                     return
-                g_data = param.grad
-                new_grads = g_data / scale_factor
-                param.grad.copy_(new_grads)
+                param.grad.copy_(param.grad / scale_factor)
 
             shared_int_layers = [
-                self.model.mlp_rbf3,
-                self.model.mlp_cbf3,
-                self.model.mlp_rbf_h,
+                getattr(self.model, "mlp_rbf3", None),
+                getattr(self.model, "mlp_cbf3", None),
+                getattr(self.model, "mlp_rbf_h", None),
             ]
-            if not self.model.triplets_only:
+            shared_int_layers = [layer for layer in shared_int_layers if layer is not None]
+            if not getattr(self.model, "triplets_only", False):
                 shared_int_layers += [
-                    self.model.mlp_rbf4,
-                    self.model.mlp_cbf4,
-                    self.model.mlp_sbf4,
+                    getattr(self.model, "mlp_rbf4", None),
+                    getattr(self.model, "mlp_cbf4", None),
+                    getattr(self.model, "mlp_sbf4", None),
                 ]
-
+                shared_int_layers = [layer for layer in shared_int_layers if layer is not None]
             for layer in shared_int_layers:
-                scale_grad(layer.weight, self.model.num_blocks)
-            # output block is shared for +1 blocks
-            scale_grad(self.model.mlp_rbf_out.weight, self.model.num_blocks + 1)
+                scale_grad(layer.weight, getattr(self.model, "num_blocks", 1))
+            if hasattr(self.model, "mlp_rbf_out"):
+                scale_grad(self.model.mlp_rbf_out.weight, getattr(self.model, "num_blocks", 1) + 1)
 
     def get_mae(self, targets, pred):
-        """
-        Mean Absolute Error
-        """
         return torch.nn.functional.l1_loss(pred, targets, reduction="mean")
 
     def get_rmse(self, targets, pred):
-        """
-        Mean L2 Error
-        """
         return torch.mean(torch.norm((pred - targets), p=2, dim=1))
 
     def get_nll(self, targets, mean_pred, var_pred):
@@ -294,10 +266,9 @@ class Trainer:
             mean_pred, targets, var_pred, reduction="mean"
         )
 
-    def predict(self, inputs):
-
-        energy, forces = self.model(inputs)
-
+    def predict(self, batch):
+        # batch is a PyG Batch object
+        energy, forces = self.model(batch)
         if self.mve:
             mean_energy = energy[:, :1]
             var_energy = torch.nn.functional.softplus(energy[:, 1:])
@@ -309,44 +280,38 @@ class Trainer:
                 forces = forces[:, 0]
             return energy, None, forces, None
 
-    @staticmethod
-    def dict2device(data, device=None):
-        if device is None:
-            device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        for key in data:
-            data[key] = data[key].to(device)
-        return data
-
-    def predict_on_batch(self, dataset_iter):
-        inputs, _ = next(dataset_iter)
-        inputs = self.dict2device(inputs)
-        return self.predict(inputs)
-
     def train_on_batch(self, dataset_iter, metrics):
         self.model.train()
-        inputs, targets = next(dataset_iter)
-        # push to GPU if available
-        inputs, targets = self.dict2device(inputs), self.dict2device(targets)
+        batch = next(dataset_iter)
+        batch = batch.to(self.device)
 
-        mean_energy, var_energy, mean_forces, var_forces = self.predict(inputs)
+        mean_energy, var_energy, mean_forces, var_forces = self.predict(batch)
+
+        # Targets (must be present in Data objects)
+        energy_target = getattr(batch, "y", None)
+        force_target = getattr(batch, "forces", None)
+        if energy_target is None:
+            raise ValueError("Batch does not have attribute 'y' for energy target.")
+        if force_target is None:
+            raise ValueError("Batch does not have attribute 'forces' for force target.")
 
         if self.mve:
-            energy_nll = self.get_nll(targets["E"], mean_energy, var_energy)
-            force_nll = self.get_nll(targets["F"], mean_forces, var_forces)
+            energy_nll = self.get_nll(energy_target, mean_energy, var_energy)
+            force_nll = self.get_nll(force_target, mean_forces, var_forces)
             loss = energy_nll * (1 - self.rho_force) + self.rho_force * force_nll
         else:
-            energy_mae = self.get_mae(targets["E"], mean_energy)
+            energy_mae = self.get_mae(energy_target, mean_energy)
             if self.loss == "mae":
-                force_metric = self.get_mae(targets["F"], mean_forces)
+                force_metric = self.get_mae(force_target, mean_forces)
             else:
-                force_metric = self.get_rmse(targets["F"], mean_forces)
+                force_metric = self.get_rmse(force_target, mean_forces)
             loss = energy_mae * (1 - self.rho_force) + self.rho_force * force_metric
 
         self.optimizers.zero_grad()
         loss.backward()
         self.scale_shared_grads()
 
-        if self.agc:
+        if self.agc and hasattr(self, "params_except_last"):
             self._adaptive_gradient_clipping(
                 self.params_except_last, clip_factor=self.grad_clip_max
             )
@@ -359,24 +324,21 @@ class Trainer:
         self.schedulers.step()
         self.exp_decay.update()
 
-        # no gradients needed anymore
         loss = loss.detach()
         with torch.no_grad():
             if self.mve:
-                energy_mae = self.get_mae(targets["E"], mean_energy)
-                force_mae = self.get_mae(targets["F"], mean_forces)
-                force_rmse = self.get_rmse(targets["F"], mean_forces)
-
+                energy_mae = self.get_mae(energy_target, mean_energy)
+                force_mae = self.get_mae(force_target, mean_forces)
+                force_rmse = self.get_rmse(force_target, mean_forces)
             else:
                 if self.loss == "mae":
                     force_mae = force_metric
-                    force_rmse = self.get_rmse(targets["F"], mean_forces)
+                    force_rmse = self.get_rmse(force_target, mean_forces)
                 else:
-                    force_mae = self.get_mae(targets["F"], mean_forces)
+                    force_mae = self.get_mae(force_target, mean_forces)
                     force_rmse = force_metric
 
             if self.mve:
-                # update molecule metrics
                 metrics.update_state(
                     nsamples=mean_energy.shape[0],
                     loss=loss,
@@ -384,7 +346,6 @@ class Trainer:
                     energy_nll=energy_nll,
                     energy_var=var_energy,
                 )
-                # update atom metrics
                 metrics.update_state(
                     nsamples=mean_forces.shape[0],
                     force_mae=force_mae,
@@ -393,13 +354,11 @@ class Trainer:
                     force_var=var_forces,
                 )
             else:
-                # update molecule metrics
                 metrics.update_state(
                     nsamples=mean_energy.shape[0],
                     loss=loss,
                     energy_mae=energy_mae,
                 )
-                # update atom metrics
                 metrics.update_state(
                     nsamples=mean_forces.shape[0],
                     force_mae=force_mae,
@@ -410,30 +369,31 @@ class Trainer:
 
     def test_on_batch(self, dataset_iter, metrics):
         self.model.eval()
-        inputs, targets = next(dataset_iter)
-        # push to GPU if available
-        inputs, targets = self.dict2device(inputs), self.dict2device(targets)
+        batch = next(dataset_iter)
+        batch = batch.to(self.device)
 
-        if self.model.direct_forces:
-            # do not need any gradients -> reduce memory consumption
+        energy_target = getattr(batch, "y", None)
+        force_target = getattr(batch, "forces", None)
+        if energy_target is None:
+            raise ValueError("Batch does not have attribute 'y' for energy target.")
+        if force_target is None:
+            raise ValueError("Batch does not have attribute 'forces' for force target.")
+
+        if getattr(self.model, "direct_forces", False):
             with torch.no_grad():
-                mean_energy, var_energy, mean_forces, var_forces = self.predict(inputs)
+                mean_energy, var_energy, mean_forces, var_forces = self.predict(batch)
         else:
-            # need gradient for forces
-            mean_energy, var_energy, mean_forces, var_forces = self.predict(inputs)
+            mean_energy, var_energy, mean_forces, var_forces = self.predict(batch)
 
         with torch.no_grad():
-            energy_mae = self.get_mae(targets["E"], mean_energy)
-            force_mae = self.get_mae(targets["F"], mean_forces)
-            force_rmse = self.get_rmse(targets["F"], mean_forces)
-
+            energy_mae = self.get_mae(energy_target, mean_energy)
+            force_mae = self.get_mae(force_target, mean_forces)
+            force_rmse = self.get_rmse(force_target, mean_forces)
             if self.mve:
-                energy_nll = self.get_nll(targets["E"], mean_energy, var_energy)
+                energy_nll = self.get_nll(energy_target, mean_energy, var_energy)
                 loss = energy_nll * (1 - self.rho_force) + self.rho_force * force_mae
-                force_nll = self.get_nll(targets["F"], mean_forces, var_forces)
+                force_nll = self.get_nll(force_target, mean_forces, var_forces)
                 loss = energy_nll * (1 - self.rho_force) + self.rho_force * force_nll
-
-                # update molecule metrics
                 metrics.update_state(
                     nsamples=mean_energy.shape[0],
                     loss=loss,
@@ -441,7 +401,6 @@ class Trainer:
                     energy_nll=energy_nll,
                     energy_var=var_energy,
                 )
-                # update atom metrics
                 metrics.update_state(
                     nsamples=mean_forces.shape[0],
                     force_mae=force_mae,
@@ -449,37 +408,30 @@ class Trainer:
                     force_nll=force_nll,
                     force_var=var_forces,
                 )
-
             else:
                 force_metric = force_mae if self.loss == "mae" else force_rmse
                 loss = (1 - self.rho_force) * energy_mae + self.rho_force * force_metric
-
-                # update molecule metrics
                 metrics.update_state(
                     nsamples=mean_energy.shape[0],
                     loss=loss,
                     energy_mae=energy_mae,
                 )
-                # update atom metrics
                 metrics.update_state(
                     nsamples=mean_forces.shape[0],
                     force_mae=force_mae,
                     force_rmse=force_rmse,
                 )
-
         return loss
 
     def eval_on_batch(self, dataset_iter):
         self.model.eval()
+        batch = next(dataset_iter)
+        batch = batch.to(self.device)
         with torch.no_grad():
-            inputs, targets = next(dataset_iter)
-            # push to GPU if available
-            inputs, targets = self.dict2device(inputs), self.dict2device(targets)
-            energy, _, forces, _ = self.predict(inputs)
-        return (energy, forces), targets
+            energy, _, forces, _ = self.predict(batch)
+        return (energy, forces), batch
 
     def state_dict(self):
-        """Returns the state of the trainer and all subinstancces except the model."""
         state_dict = {
             key: value
             for key, value in self.__dict__.items()
@@ -497,15 +449,9 @@ class Trainer:
         return state_dict
 
     def load_state_dict(self, state_dict):
-        """Loads the schedulers state.
-
-        Args:
-            state_dict (dict): scheduler state. Should be an object returned
-                from a call to :meth:`state_dict`.
-        """
         trainer_dict = {
             key: value
-            for key, value in self.state_dict.items()
+            for key, value in self.state_dict().items()
             if key
             not in [
                 "model",
@@ -519,59 +465,7 @@ class Trainer:
         for attr in ["schedulers", "optimizers", "plateau_callback", "exp_decay"]:
             getattr(self, attr).load_state_dict(state_dict[attr])
 
-
 class ReduceLROnPlateau:
-    """Reduce learning rate (and weight decay) when a metric has stopped improving.
-    Models often benefit from reducing the learning rate by a factor
-    of 2-10 once learning stagnates. This scheduler reads a metrics
-    quantity and if no improvement is seen for a 'patience' number
-    of steps, the learning rate (and weight decay) is reduced.
-
-    Parameters
-    ----------
-        optimizer: Optimizer, list:
-            Wrapped optimizer.
-        scheduler: LRSchedule, list
-            Learning rate schedule of the optimizer.
-            Asserts that the second schedule belongs to second optimizer and so on.
-        mode: str
-            One of `min`, `max`. In `min` mode, lr will
-            be reduced when the quantity monitored has stopped
-            decreasing; in `max` mode it will be reduced when the
-            quantity monitored has stopped increasing. Default: 'min'.
-        factor: float
-            Factor by which the learning rate will be
-            reduced. new_lr = lr * factor. Default: 0.1.
-        patience: int
-            Number of steps with no improvement after
-            which learning rate will be reduced. For example, if
-            `patience = 2`, then we will ignore the first 2 steps
-            with no improvement, and will only decrease the LR after the
-            3rd step if the loss still hasn't improved then.
-            Default: 10.
-        threshold: float
-            Threshold for measuring the new optimum,
-            to only focus on significant changes. Default: 1e-4.
-        max_reduce: int
-            Number of maximum decays on plateaus. Default: 10.
-        threshold_mode: str
-            One of `rel`, `abs`. In `rel` mode,
-            dynamic_threshold = best * ( 1 + threshold ) in 'max'
-            mode or best * ( 1 - threshold ) in `min` mode.
-            In `abs` mode, dynamic_threshold = best + threshold in
-            `max` mode or best - threshold in `min` mode. Default: 'rel'.
-        cooldown: int
-            Number of steps to wait before resuming
-            normal operation after lr has been reduced. Default: 0.
-        eps: float
-            Minimal decay applied to lr. If the difference
-            between new and old lr is smaller than eps, the update is
-            ignored. Default: 1e-8.
-        verbose: bool
-            If ``True``, prints a message to stdout for
-            each update. Default: ``False``.
-    """
-
     def __init__(
         self,
         optimizer,
@@ -587,7 +481,6 @@ class ReduceLROnPlateau:
         mode="min",
         verbose=False,
     ):
-
         if factor >= 1.0:
             raise ValueError(f"Factor should be < 1.0 but is {factor}.")
         self.factor = factor
@@ -599,15 +492,13 @@ class ReduceLROnPlateau:
         if isinstance(scheduler, MultiWrapper):
             self.scheduler = scheduler.wrapped
 
-        if not isinstance(self.optimizer, (list,tuple)):
+        if not isinstance(self.optimizer, (list, tuple)):
             self.optimizer = [self.optimizer]
-        if not isinstance(self.scheduler, (list,tuple)):
+        if not isinstance(self.scheduler, (list, tuple)):
             self.scheduler = [self.scheduler]
 
         assert len(self.optimizer) == len(self.scheduler)
-
         for opt in self.optimizer:
-            # Attach optimizer
             if not isinstance(opt, torch.optim.Optimizer):
                 raise TypeError(f"{type(opt).__name__} is not an Optimizer but is of type {type(opt)}")
 
@@ -620,7 +511,7 @@ class ReduceLROnPlateau:
         self.threshold_mode = threshold_mode
         self.best = None
         self.num_bad_steps = None
-        self.mode_worse = None  # the worse value for the chosen mode
+        self.mode_worse = None
         self.eps = eps
         self.last_step = 0
         self._init_is_better(
@@ -630,13 +521,11 @@ class ReduceLROnPlateau:
         self._reduce_counter = 0
 
     def _reset(self):
-        """Resets num_bad_steps counter and cooldown counter."""
         self.best = self.mode_worse
         self.cooldown_counter = 0
         self.num_bad_steps = 0
 
     def step(self, metrics):
-        # convert `metrics` to float, in case it's a zero-dim Tensor
         current = float(metrics)
         step = self.last_step + 1
         self.last_step = step
@@ -649,7 +538,7 @@ class ReduceLROnPlateau:
 
         if self.in_cooldown:
             self.cooldown_counter -= 1
-            self.num_bad_steps = 0  # ignore any bad steps in cooldown
+            self.num_bad_steps = 0
 
         if self.num_bad_steps > self.patience:
             self._reduce(step)
@@ -658,8 +547,7 @@ class ReduceLROnPlateau:
 
     def _reduce(self, step):
         self._reduce_counter += 1
-
-        for optimzer, schedule in zip(self.optimizer, self.scheduler):
+        for optimizer, schedule in zip(self.optimizer, self.scheduler):
             if hasattr(schedule, "base_lrs"):
                 schedule.base_lrs = [lr * self.factor for lr in schedule.base_lrs]
             else:
@@ -677,14 +565,11 @@ class ReduceLROnPlateau:
         if self.mode == "min" and self.threshold_mode == "rel":
             rel_epsilon = 1.0 - self.threshold
             return a < best * rel_epsilon
-
         elif self.mode == "min" and self.threshold_mode == "abs":
             return a < best - self.threshold
-
         elif self.mode == "max" and self.threshold_mode == "rel":
             rel_epsilon = self.threshold + 1.0
             return a > best * rel_epsilon
-
         else:  # mode == 'max' and epsilon_mode == 'abs':
             return a > best + self.threshold
 
@@ -696,9 +581,8 @@ class ReduceLROnPlateau:
 
         if mode == "min":
             self.mode_worse = np.inf
-        else:  # mode == 'max':
+        else:
             self.mode_worse = -np.inf
-
         self.mode = mode
         self.threshold = threshold
         self.threshold_mode = threshold_mode
@@ -716,7 +600,6 @@ class ReduceLROnPlateau:
             mode=self.mode, threshold=self.threshold, threshold_mode=self.threshold_mode
         )
 
-
 class MultiWrapper:
     def __init__(self, *ops):
         self.wrapped = ops
@@ -733,12 +616,8 @@ class MultiWrapper:
             op.step()
 
     def state_dict(self):
-        """Returns the overall state dict of the wrapped instances."""
         return {i: opt.state_dict() for i, opt in enumerate(self.wrapped)}
 
     def load_state_dict(self, state_dict):
-        """Load the state_dict for each wrapped instance.
-        Assumes the order is the same as when the state_dict was loaded
-        """
         for i, opt in enumerate(self.wrapped):
             opt.load_state_dict(state_dict[i])
