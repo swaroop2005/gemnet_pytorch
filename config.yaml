@@ -1,34 +1,40 @@
-dataset:     /content/drive/MyDrive/OC20/is2re/100k_extracted/is2res_train_val_test_lmdbs/data/is2re/100k/train/data.lmdb
+dataset: /content/drive/MyDrive/OC20/is2re/100k_extracted/is2res_train_val_test_lmdbs/data/is2re/100k/train/data.lmdb
 val_dataset: /content/drive/MyDrive/OC20/val_id/is2res_train_val_test_lmdbs/data/is2re/all/val_id/data.lmdb
 
-# ─── Model ────────────────────────────────────────
-model:
-  num_spherical: 7
-  num_radial: 64
-  num_blocks: 4
-  emb_size_atom: 256
-  emb_size_edge: 512
-  emb_size_trip: 64           # Combined from trip_in & trip_out
-  emb_size_quad: 32           # Combined from quad_in & quad_out
-  emb_size_rbf: 16
-  emb_size_cbf: 16
-  emb_size_sbf: 32
-  emb_size_bil_trip: 64       # Out for trip
-  emb_size_bil_quad: 32       # Out for quad
-  num_before_skip: 1
-  num_after_skip: 2
-  num_concat: 1
-  num_atom: 100
-  triplets_only: false
-  cutoff: 12.0
-  max_neighbors: 30
-  extensive: false
-  activation: silu
-  scale_file: "./scaling_is2re_factors.json"
+# Model parameters (flattened)
+num_spherical: 7
+num_radial: 64
+num_blocks: 4
+emb_size_atom: 256
+emb_size_edge: 512
+emb_size_trip: 64
+emb_size_quad: 32
+emb_size_rbf: 16
+emb_size_cbf: 16
+emb_size_sbf: 32
+emb_size_bil_trip: 64
+emb_size_bil_quad: 32
+num_before_skip: 1
+num_after_skip: 2
+num_concat: 1
+num_atom: 100
+triplets_only: false
+cutoff: 12.0
+max_neighbors: 30
+extensive: false
+activation: silu
+scale_file: "./scaling_is2re_factors.json"
 
-# ─── Optimizer ────────────────────────────────────
-batch_size:       4
-eval_batch_size:  4
+# Required (add these if missing)
+int_cutoff: 12.0             # Usually same as cutoff
+envelope_exponent: 5         # Common value for GemNet/OC20
+output_init: null            # Use 'null' unless you have a pretrained checkpoint
+data_seed: 42                # Any integer for reproducibility
+comment: "IS2RE scaling factors"
+
+# Optimizer & training
+batch_size: 4
+eval_batch_size: 4
 learning_rate: 5.e-4
-max_epochs:      30
-loss_energy:    mae
+max_epochs: 30
+loss_energy: mae
