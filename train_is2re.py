@@ -56,7 +56,7 @@ def build_model(cfg):
         "activation",
         "emb_size_rbf", "emb_size_cbf", "emb_size_sbf",
         "emb_size_aint_in", "emb_size_aint_out",  
-        'scale_file",
+        "scale_file",
     }
     kw = {k: v for k, v in model_cfg.items() if k in allowed}
 
